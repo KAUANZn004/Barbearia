@@ -561,18 +561,26 @@ async function refreshAgenda() {
   document.getElementById('collab-metric-upcoming').textContent = String(upcomingReal.length);
 
   renderList('collab-today-list', todayReal, (item) => `
-    <li class="appt-item">
-      <p class="text-sm font-semibold">${normalizeTime(item.horario)} · ${escapeHtml(item.cliente_nome || '—')}</p>
-      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.servico_nome || '—')} · ${escapeHtml(item.status || 'pendente')}</p>
+    <li class="appt-item" style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;">
+      <div>
+        <p class="text-sm font-semibold">${normalizeTime(item.horario)} · ${escapeHtml(item.cliente_nome || '—')}</p>
+        <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.servico_nome || '—')} · ${escapeHtml(item.status || 'pendente')}</p>
+      </div>
+      ${item.status !== 'cancelado' ? `<button type="button" class="service-icon-btn is-danger" data-cancel-appt="${item.id}" aria-label="Cancelar agendamento" style="white-space:nowrap;">X</button>` : '<span class="text-xs text-zinc-500">Cancelado</span>'}
     </li>
   `);
 
   renderList('collab-upcoming-list', upcomingReal, (item) => `
-    <li class="appt-item">
-      <p class="text-sm font-semibold">${formatDateBR(item.data)} · ${normalizeTime(item.horario)}</p>
-      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.cliente_nome || '—')} · ${escapeHtml(item.servico_nome || '—')}</p>
+    <li class="appt-item" style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;">
+      <div>
+        <p class="text-sm font-semibold">${formatDateBR(item.data)} · ${normalizeTime(item.horario)}</p>
+        <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.cliente_nome || '—')} · ${escapeHtml(item.servico_nome || '—')}</p>
+      </div>
+      ${item.status !== 'cancelado' ? `<button type="button" class="service-icon-btn is-danger" data-cancel-appt="${item.id}" aria-label="Cancelar agendamento" style="white-space:nowrap;">X</button>` : '<span class="text-xs text-zinc-500">Cancelado</span>'}
     </li>
   `);
+
+  bindCancelAppointmentButtons();
 }
 
 async function bloquearHorario(data, hora) {
@@ -764,6 +772,25 @@ async function executarBloqueioComConflito(action) {
     console.error('[colaborador.js] erro ao executar bloqueio com conflito:', error);
     collabToast(error?.message || 'Nao foi possivel executar o bloqueio.');
   }
+}
+
+function bindCancelAppointmentButtons() {
+  document.querySelectorAll('[data-cancel-appt]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const apptId = btn.getAttribute('data-cancel-appt');
+      if (!apptId) return;
+      if (!window.confirm('Deseja cancelar este agendamento? O horário voltará a ficar disponível.')) return;
+      try {
+        await Api.cancelAppointment(apptId);
+        collabToast('Agendamento cancelado. Horário liberado.');
+        await refreshAgenda();
+        await refreshBlockedSlots();
+      } catch (error) {
+        console.error('[colaborador.js] erro ao cancelar agendamento:', error);
+        collabToast(error?.message || 'Não foi possível cancelar o agendamento.');
+      }
+    });
+  });
 }
 
 function bindBlockControls() {
