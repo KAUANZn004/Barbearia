@@ -14,7 +14,9 @@
 
 const PROFILE_BUCKET = 'barbeiros-perfis';
 const PROFILE_PLACEHOLDER = 'https://placehold.co/320x320?text=Avatar';
-const QUICK_SLOTS = ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00'];
+const BUSINESS_HOUR_START = '08:00';
+const BUSINESS_HOUR_END = '19:00';
+const SLOT_INTERVAL_MINUTES = 30;
 
 const CollaboratorState = {
   colaborador: null,
@@ -41,6 +43,7 @@ function collabToast(message) {
 function clearCollaboratorSession() {
   localStorage.removeItem('barbersaas.collab_id');
   localStorage.removeItem('barbersaas.slug');
+  localStorage.removeItem('barbersaas.barbearia_id');
   localStorage.removeItem('colaborador_logado');
 }
 
@@ -54,6 +57,39 @@ function todayISO() {
 
 function normalizeTime(timeValue) {
   return String(timeValue || '').slice(0, 5);
+}
+
+function timeToMinutes(timeValue) {
+  const [hours, minutes] = normalizeTime(timeValue).split(':').map(Number);
+  return (hours * 60) + minutes;
+}
+
+function minutesToTime(totalMinutes) {
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+  const minutes = String(totalMinutes % 60).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function getOperatingSlots() {
+  const slots = [];
+  const startMinutes = timeToMinutes(BUSINESS_HOUR_START);
+  const endMinutes = timeToMinutes(BUSINESS_HOUR_END);
+
+  for (let current = startMinutes; current <= endMinutes; current += SLOT_INTERVAL_MINUTES) {
+    slots.push(minutesToTime(current));
+  }
+
+  return slots;
+}
+
+function getSelectedDate() {
+  return String(CollaboratorState.selectedDate || todayISO());
+}
+
+function isDuplicateSlotError(error) {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  return code === '23505' || message.includes('duplicate') || message.includes('unique');
 }
 
 function formatDateBR(isoDate) {
@@ -310,6 +346,7 @@ async function saveProfile(event) {
     });
 
     CollaboratorState.colaborador = updated;
+    localStorage.setItem('colaborador_logado', JSON.stringify(updated));
     CollaboratorState.services = (updated.servicos_json || []).map((service) => buildServiceDraft(service));
     CollaboratorState.pendingAvatarBlob = null;
     CollaboratorState.pendingRemoveAvatar = false;
@@ -450,13 +487,31 @@ function renderQuickSlots() {
   const grid = document.getElementById('collab-slots-grid');
   if (!grid) return;
 
-  const blocked = new Set((CollaboratorState.blockedSlots || []).map((item) => normalizeTime(item.horario)));
-  grid.innerHTML = QUICK_SLOTS.map((slot) => {
-    const isBlocked = blocked.has(slot);
+  const selectedDate = getSelectedDate();
+  const blockedByTime = new Map(
+    (CollaboratorState.blockedSlots || [])
+      .filter((item) => item.data === selectedDate)
+      .map((item) => [normalizeTime(item.horario), item]),
+  );
+
+  grid.innerHTML = getOperatingSlots().map((slot) => {
+    const blockedItem = blockedByTime.get(slot);
+    const isBlocked = Boolean(blockedItem);
     return `
-      <button type="button" class="slot-btn ${isBlocked ? 'collab-slot-blocked' : 'collab-slot-open'}" data-quick-slot="${slot}">
-        ${slot}
-      </button>
+      <article class="collab-slot-card ${isBlocked ? 'collab-slot-card-blocked' : 'collab-slot-card-open'}" data-slot-card="${slot}">
+        <div>
+          <p class="collab-slot-time">${slot}</p>
+          <p class="collab-slot-state">${isBlocked ? 'Bloqueado manualmente' : 'Disponível para agendamento'}</p>
+        </div>
+        <button
+          type="button"
+          class="slot-btn ${isBlocked ? 'collab-slot-blocked' : 'collab-slot-open'}"
+          data-quick-slot="${slot}"
+          data-slot-action="${isBlocked ? 'unblock' : 'block'}"
+        >
+          ${isBlocked ? 'DESBLOQUEAR' : 'BLOQUEAR'}
+        </button>
+      </article>
     `;
   }).join('');
 }
@@ -476,7 +531,7 @@ async function refreshBlockedSlots() {
   renderList('collab-blocked-list', blocked, (item) => `
     <li class="block-item">
       <p class="text-sm font-semibold">${formatDateBR(item.data)} · ${normalizeTime(item.horario)}</p>
-      <p class="mt-1 text-xs text-zinc-400">Bloqueio manual ativo</p>
+      <p class="mt-1 text-xs text-zinc-400">Bloqueio manual ativo para impedir novos agendamentos neste slot.</p>
     </li>
   `);
 
@@ -499,31 +554,41 @@ async function refreshAgenda() {
     20,
   );
 
-  const activeToday = todayAppointments.filter((item) => item.status !== 'bloqueado');
-  document.getElementById('collab-metric-total').textContent = String(activeToday.length);
-  document.getElementById('collab-metric-upcoming').textContent = String(upcoming.filter((item) => item.status !== 'bloqueado').length);
+  const todayReal = todayAppointments.filter((item) => item.status !== 'bloqueado');
+  const upcomingReal = upcoming.filter((item) => item.status !== 'bloqueado');
 
-  renderList('collab-today-list', todayAppointments, (item) => `
+  document.getElementById('collab-metric-total').textContent = String(todayReal.length);
+  document.getElementById('collab-metric-upcoming').textContent = String(upcomingReal.length);
+
+  renderList('collab-today-list', todayReal, (item) => `
     <li class="appt-item">
-      <p class="text-sm font-semibold">${normalizeTime(item.horario)} · ${escapeHtml(item.cliente_nome || 'Horario bloqueado')}</p>
-      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.servico_nome || 'Bloqueio manual')} · status: ${escapeHtml(item.status || 'pendente')}</p>
+      <p class="text-sm font-semibold">${normalizeTime(item.horario)} · ${escapeHtml(item.cliente_nome || '—')}</p>
+      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.servico_nome || '—')} · ${escapeHtml(item.status || 'pendente')}</p>
     </li>
   `);
 
-  renderList('collab-upcoming-list', upcoming, (item) => `
+  renderList('collab-upcoming-list', upcomingReal, (item) => `
     <li class="appt-item">
       <p class="text-sm font-semibold">${formatDateBR(item.data)} · ${normalizeTime(item.horario)}</p>
-      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.cliente_nome || 'Horario bloqueado')} · ${escapeHtml(item.servico_nome || 'Bloqueio manual')}</p>
+      <p class="mt-1 text-xs text-zinc-300">${escapeHtml(item.cliente_nome || '—')} · ${escapeHtml(item.servico_nome || '—')}</p>
     </li>
   `);
 }
 
-async function createManualBlock(dateValue, timeValue) {
+async function bloquearHorario(data, hora) {
+  const barbeariaId = String(
+    CollaboratorState.barbearia?.id
+      || CollaboratorState.colaborador?.barbearia_id
+      || localStorage.getItem('barbersaas.barbearia_id')
+      || '',
+  ).trim() || null;
+
   await Api.createBlockedSlot({
+    barbearia_id: barbeariaId,
     barbearia_slug: CollaboratorState.barbearia.slug,
     barbeiro_id: CollaboratorState.colaborador.id,
-    data: dateValue,
-    horario: timeValue,
+    data,
+    horario: hora,
     status: 'bloqueado',
     cliente_nome: 'BLOQUEIO MANUAL',
     cliente_telefone: null,
@@ -532,7 +597,7 @@ async function createManualBlock(dateValue, timeValue) {
 }
 
 async function deleteManualBlockByTime(timeValue) {
-  const target = CollaboratorState.blockedSlots.find((item) => item.data === CollaboratorState.selectedDate && normalizeTime(item.horario) === timeValue);
+  const target = CollaboratorState.blockedSlots.find((item) => item.data === getSelectedDate() && normalizeTime(item.horario) === timeValue);
   if (!target) {
     collabToast('Nenhum bloqueio encontrado para este horário.');
     return;
@@ -570,10 +635,13 @@ async function verificarConflitos(data, hora) {
 
 /** Cria bloqueio para cada horário da grade padrão em uma data. */
 async function bloquearTodosOsSlots(data) {
-  for (const slot of QUICK_SLOTS) {
+  for (const slot of getOperatingSlots()) {
     try {
-      await createManualBlock(data, slot);
-    } catch (_) {
+      await bloquearHorario(data, slot);
+    } catch (error) {
+      if (!isDuplicateSlotError(error)) {
+        throw error;
+      }
       // Ignora duplicata — slot pode já estar bloqueado
     }
   }
@@ -669,7 +737,7 @@ async function executarBloqueioComConflito(action) {
         await Api.cancelAppointment(appt.id);
       }
       if (hora) {
-        await createManualBlock(data, hora);
+        await bloquearHorario(data, hora);
       } else {
         await bloquearTodosOsSlots(data);
       }
@@ -683,9 +751,9 @@ async function executarBloqueioComConflito(action) {
       // Dia inteiro: bloqueia apenas slots sem agendamento
       const { appointments } = await verificarConflitos(data, null);
       const ocupados = new Set(appointments.map((a) => normalizeTime(a.horario)));
-      const livres = QUICK_SLOTS.filter((slot) => !ocupados.has(slot));
+      const livres = getOperatingSlots().filter((slot) => !ocupados.has(slot));
       for (const slot of livres) {
-        await createManualBlock(data, slot);
+        await bloquearHorario(data, slot);
       }
       collabToast(`${livres.length} horário(s) vago(s) bloqueado(s).`);
     }
@@ -702,7 +770,7 @@ function bindBlockControls() {
   const dateInput = document.getElementById('collab-block-date');
   const timeInput = document.getElementById('collab-block-time');
   const form = document.getElementById('collab-block-form');
-    const blockDayBtn = document.getElementById('collab-block-day-btn');
+  const blockDayBtn = document.getElementById('collab-block-day-btn');
   const grid = document.getElementById('collab-slots-grid');
 
   if (dateInput) {
@@ -714,6 +782,10 @@ function bindBlockControls() {
         console.error('[colaborador.js] erro ao atualizar bloqueios:', error);
       });
     });
+  }
+
+  if (timeInput) {
+    timeInput.value = BUSINESS_HOUR_START;
   }
 
   form?.addEventListener('submit', async (event) => {
@@ -740,11 +812,11 @@ function bindBlockControls() {
         return;
       }
 
-      await createManualBlock(dateValue, timeValue);
+      await bloquearHorario(dateValue, timeValue);
       await refreshBlockedSlots();
       await refreshAgenda();
       collabToast('Horário bloqueado com sucesso.');
-      if (timeInput) timeInput.value = '';
+      if (timeInput) timeInput.value = BUSINESS_HOUR_START;
     } catch (error) {
       console.error('[colaborador.js] erro ao criar bloqueio:', error);
       collabToast(error?.message || 'Nao foi possivel bloquear o horário.');
@@ -756,11 +828,11 @@ function bindBlockControls() {
     if (!button) return;
 
     const timeValue = button.getAttribute('data-quick-slot');
-    const selectedDate = CollaboratorState.selectedDate || todayISO();
-    const isBlocked = button.classList.contains('collab-slot-blocked');
+    const selectedDate = getSelectedDate();
+    const action = button.getAttribute('data-slot-action');
 
     try {
-      if (isBlocked) {
+      if (action === 'unblock') {
         await deleteManualBlockByTime(timeValue);
         collabToast('Bloqueio removido.');
         await refreshBlockedSlots();
@@ -773,53 +845,51 @@ function bindBlockControls() {
           mostrarModalConflito(selectedDate, timeValue, count, appointments);
           return;
         }
-        await createManualBlock(selectedDate, timeValue);
+        await bloquearHorario(selectedDate, timeValue);
         collabToast('Horário bloqueado.');
         await refreshBlockedSlots();
         await refreshAgenda();
       }
-
-      // BLOQUEAR DIA INTEIRO
-      blockDayBtn?.addEventListener('click', async () => {
-        const dateValue = dateInput?.value || todayISO();
-        try {
-          await bloquearDiaInteiro(dateValue);
-        } catch (error) {
-          console.error('[colaborador.js] erro ao bloquear dia inteiro:', error);
-          collabToast(error?.message || 'Nao foi possivel bloquear o dia.');
-        }
-      });
-
-      // Botões do modal de conflito
-      document.getElementById('conflict-btn-cancel-block')?.addEventListener('click', () => {
-        executarBloqueioComConflito('cancelar-e-bloquear').catch((error) => {
-          console.error('[colaborador.js] erro ao cancelar-e-bloquear:', error);
-          collabToast('Erro ao cancelar agendamentos e bloquear.');
-        });
-      });
-
-      document.getElementById('conflict-btn-block-free')?.addEventListener('click', () => {
-        executarBloqueioComConflito('bloquear-vagos').catch((error) => {
-          console.error('[colaborador.js] erro ao bloquear vagos:', error);
-          collabToast('Erro ao bloquear horários vagos.');
-        });
-      });
-
-      document.getElementById('conflict-btn-abort')?.addEventListener('click', () => {
-        fecharModalConflito();
-        pendingBlockAction = null;
-        collabToast('Bloqueio cancelado.');
-      });
-
-      document.getElementById('conflict-modal')?.addEventListener('click', (event) => {
-        if (event.target === document.getElementById('conflict-modal')) {
-          fecharModalConflito();
-          pendingBlockAction = null;
-        }
-      });
     } catch (error) {
       console.error('[colaborador.js] erro ao alternar quick slot:', error);
       collabToast('Nao foi possivel alterar o bloqueio.');
+    }
+  });
+
+  blockDayBtn?.addEventListener('click', async () => {
+    const dateValue = dateInput?.value || todayISO();
+    try {
+      await bloquearDiaInteiro(dateValue);
+    } catch (error) {
+      console.error('[colaborador.js] erro ao bloquear dia inteiro:', error);
+      collabToast(error?.message || 'Nao foi possivel bloquear o dia.');
+    }
+  });
+
+  document.getElementById('conflict-btn-cancel-block')?.addEventListener('click', () => {
+    executarBloqueioComConflito('cancelar-e-bloquear').catch((error) => {
+      console.error('[colaborador.js] erro ao cancelar-e-bloquear:', error);
+      collabToast('Erro ao cancelar agendamentos e bloquear.');
+    });
+  });
+
+  document.getElementById('conflict-btn-block-free')?.addEventListener('click', () => {
+    executarBloqueioComConflito('bloquear-vagos').catch((error) => {
+      console.error('[colaborador.js] erro ao bloquear vagos:', error);
+      collabToast('Erro ao bloquear horários vagos.');
+    });
+  });
+
+  document.getElementById('conflict-btn-abort')?.addEventListener('click', () => {
+    fecharModalConflito();
+    pendingBlockAction = null;
+    collabToast('Bloqueio cancelado.');
+  });
+
+  document.getElementById('conflict-modal')?.addEventListener('click', (event) => {
+    if (event.target === document.getElementById('conflict-modal')) {
+      fecharModalConflito();
+      pendingBlockAction = null;
     }
   });
 }
@@ -876,6 +946,7 @@ async function bootstrapCollaboratorDashboard() {
   CollaboratorState.colaborador = colaborador;
   CollaboratorState.barbearia = barbearia;
   localStorage.setItem('barbersaas.slug', String(colaborador.barbearia_slug || ''));
+  localStorage.setItem('barbersaas.barbearia_id', String(barbearia.id || colaborador.barbearia_id || ''));
 
   syncHeader();
   hydrateProfile();

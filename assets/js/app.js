@@ -1,9 +1,8 @@
 'use strict';
 
-const CLIENT_HOURS = [
-  '09:00', '10:00', '11:00', '12:00', '13:00',
-  '14:00', '15:00', '16:00', '17:00', '18:00', '19:00',
-];
+const CLIENT_BUSINESS_HOUR_START = '08:00';
+const CLIENT_BUSINESS_HOUR_END = '19:00';
+const CLIENT_SLOT_INTERVAL_MINUTES = 30;
 
 const ClientState = {
   slug: '',
@@ -42,6 +41,29 @@ function formatCurrency(value) {
 
 function normalizeTime(value) {
   return String(value || '').slice(0, 5);
+}
+
+function timeToMinutes(value) {
+  const [hours, minutes] = normalizeTime(value).split(':').map(Number);
+  return (hours * 60) + minutes;
+}
+
+function minutesToTime(totalMinutes) {
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+  const minutes = String(totalMinutes % 60).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function getClientSlots() {
+  const slots = [];
+  const startMinutes = timeToMinutes(CLIENT_BUSINESS_HOUR_START);
+  const endMinutes = timeToMinutes(CLIENT_BUSINESS_HOUR_END);
+
+  for (let current = startMinutes; current <= endMinutes; current += CLIENT_SLOT_INTERVAL_MINUTES) {
+    slots.push(minutesToTime(current));
+  }
+
+  return slots;
 }
 
 function toISODate(date) {
@@ -172,6 +194,7 @@ function updateSelectedDateLabel() {
   const label = document.getElementById('selected-date-label');
   if (!label) return;
   label.textContent = ClientState.selectedDate ? formatDisplayDate(ClientState.selectedDate) : '';
+}
 
 /**
  * Controla o bloqueio visual das etapas de data e horário.
@@ -184,7 +207,6 @@ function updateCalendarLock() {
   document.getElementById('section-slots')?.classList.toggle('section-locked', locked);
   const notice = document.getElementById('calendar-lock-notice');
   if (notice) notice.hidden = !locked;
-}
 }
 
 function renderCalendar() {
@@ -234,26 +256,76 @@ function renderCalendar() {
   }
 }
 
+/**
+ * renderSlots(occupiedTimes)
+ *
+ * Recebe o array de horários já ocupados retornados pelo Supabase
+ * (agendamentos com status IN ('confirmado', 'bloqueado')) e renderiza
+ * a grade completa de botões de horário.
+ *
+ * Para cada slot de getClientSlots():
+ *   - Se o horário está em occupiedSet → classe .status-indisponivel + [disabled] + texto "Indisponível"
+ *   - Se não está → classe .horario-disponivel, permite seleção normalmente.
+ */
 function renderSlots(occupiedTimes) {
   const grid = document.getElementById('slots-grid');
   if (!grid) return;
 
+  const clientSlots = getClientSlots();
+  // Set para lookup O(1): contém cada horário ocupado ou bloqueado vindos do banco
   const occupiedSet = new Set((occupiedTimes || []).map(normalizeTime));
-  grid.innerHTML = CLIENT_HOURS.map((time) => {
+  grid.innerHTML = clientSlots.map((time) => {
     const isOccupied = occupiedSet.has(time);
     const isSelected = ClientState.selectedTime === time;
+    const stateClass = isOccupied ? 'status-indisponivel' : 'horario-disponivel';
     return `
-      <button type="button" class="slot-btn ${isOccupied ? 'is-occupied' : ''} ${isSelected ? 'is-selected' : ''}" data-slot-time="${time}" ${isOccupied ? 'disabled' : ''}>
-        ${time}
+      <button type="button" class="slot-btn ${stateClass} ${isSelected && !isOccupied ? 'is-selected' : ''}" data-slot-time="${time}" ${isOccupied ? 'disabled aria-disabled="true"' : ''}>
+        ${isOccupied ? 'Indisponível' : time}
       </button>
     `;
   }).join('');
 
-  if (occupiedSet.size === CLIENT_HOURS.length) {
+  if (occupiedSet.size === clientSlots.length) {
     updateSlotFeedback('Todos os horários deste dia estão ocupados.');
   } else if (ClientState.selectedDate) {
     updateSlotFeedback('Escolha um horário livre para continuar.');
   }
+}
+
+/**
+ * atualizarStatusHorarios()
+ *
+ * Faz uma nova consulta ao Supabase e atualiza os botões já renderizados
+ * no DOM sem re-renderizar toda a grade. Útil para sincronização em tempo real.
+ * Aplica .status-indisponivel + [disabled] nos slots que se tornaram ocupados
+ * e restaura .horario-disponivel nos que ficaram livres.
+ */
+async function atualizarStatusHorarios() {
+  if (!ClientState.selectedBarber || !ClientState.selectedDate) return;
+
+  const rows = await Api.getAppointmentsByDate(
+    ClientState.slug,
+    toISODate(ClientState.selectedDate),
+    ClientState.selectedBarber.id,
+    ['confirmado', 'bloqueado', 'pendente'],
+  );
+
+  const occupiedSet = new Set(rows.map((r) => normalizeTime(r.horario)));
+
+  document.querySelectorAll('#slots-grid .slot-btn').forEach((btn) => {
+    const time = btn.dataset.slotTime;
+    if (!time) return;
+    const isOccupied = occupiedSet.has(normalizeTime(time));
+    btn.disabled = isOccupied;
+    btn.setAttribute('aria-disabled', String(isOccupied));
+    btn.textContent = isOccupied ? 'Indisponível' : time;
+    btn.classList.toggle('status-indisponivel', isOccupied);
+    btn.classList.toggle('horario-disponivel', !isOccupied);
+    if (isOccupied && ClientState.selectedTime === time) {
+      ClientState.selectedTime = null;
+      btn.classList.remove('is-selected');
+    }
+  });
 }
 
 async function loadSlots() {
@@ -278,8 +350,14 @@ async function loadSlots() {
     ClientState.slug,
     toISODate(ClientState.selectedDate),
     ClientState.selectedBarber.id,
+    ['confirmado', 'bloqueado', 'pendente'],
   );
 
+  /*
+    Na listagem de horários disponíveis, bloqueios manuais e agendamentos
+    confirmados (incluindo pendentes) são tratados da mesma forma:
+    todos tornam o slot indisponível na grade do cliente.
+  */
   renderSlots(rows.map((row) => row.horario));
 }
 
@@ -392,6 +470,25 @@ function bindStaticEvents() {
     }
 
     try {
+      // Checagem de segurança: re-consulta o banco imediatamente antes de gravar
+      // para garantir que o slot não foi ocupado enquanto o cliente navegava.
+      const conflictCheck = await Api.getAppointmentsByDate(
+        ClientState.slug,
+        toISODate(ClientState.selectedDate),
+        ClientState.selectedBarber.id,
+        ['confirmado', 'bloqueado', 'pendente'],
+      );
+      const takenTimes = new Set(conflictCheck.map((r) => normalizeTime(r.horario)));
+      if (takenTimes.has(normalizeTime(ClientState.selectedTime))) {
+        clientToast('Este horário acabou de ser ocupado. Por favor, escolha outro.');
+        await loadSlots();
+        if (confirmButton) {
+          confirmButton.disabled = false;
+          confirmButton.textContent = 'Confirmar agendamento';
+        }
+        return;
+      }
+
       await Api.createAppointment({
         barbearia_slug: ClientState.slug,
         barbeiro_id: ClientState.selectedBarber.id,

@@ -215,9 +215,31 @@ main {
   background: rgba(212, 175, 55, 0.18);
 }
 
-.slot-btn.is-occupied {
+/* Slot ocupado (confirmado ou bloqueado): indisponível para o cliente */
+.slot-btn.status-indisponivel {
+  background-color: #222;
+  color: rgba(229, 85, 85, 0.6);
+  border-color: rgba(229, 85, 85, 0.2);
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
+  font-size: 0.65rem;
+  letter-spacing: 0.01em;
+}
+
+/* Slot disponível para o cliente selecionar */
+.slot-btn.horario-disponivel {
+  border-color: var(--panel-border);
+}
+
+/* Slot ocupado (agendamento confirmado) ou bloqueado manualmente pelo barbeiro.
+   O front-end aplica esta classe quando o horario consta no retorno do Supabase
+   com status IN ('confirmado', 'bloqueado'). O botão fica desativado via [disabled]. */
+.slot-btn.horario-inativo {
+  background-color: #333;
+  color: #666;
+  cursor: not-allowed;
   text-decoration: line-through;
-  opacity: 0.45;
   pointer-events: none;
 }
 
@@ -260,6 +282,11 @@ main {
   border-radius: 0.95rem;
   padding: 0.85rem 0.9rem;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.appt-item-blocked {
+  border-color: rgba(229, 85, 85, 0.38);
+  background: rgba(229, 85, 85, 0.1);
 }
 
 .appt-item p,
@@ -748,6 +775,57 @@ main {
   border-color: rgba(229, 85, 85, 0.45);
   color: #ffd9d9;
   background: rgba(229, 85, 85, 0.18);
+}
+
+.collab-slot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 0.9rem;
+  padding: 0.65rem 0.6rem;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.collab-slot-card button {
+  width: 100%;
+  padding: 0.3rem 0.25rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: 0.45rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collab-slot-time {
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.collab-slot-state {
+  margin-top: 0.15rem;
+  font-size: 0.62rem;
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collab-slot-card-open {
+  border-color: rgba(123, 201, 255, 0.18);
+}
+
+.collab-slot-card-blocked {
+  border-color: rgba(229, 85, 85, 0.32);
+  background: rgba(229, 85, 85, 0.08);
 }
 
 /* ── Suporte WhatsApp no cliente ───────────────────── */

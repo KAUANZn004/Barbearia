@@ -54,14 +54,13 @@ const Api = (() => {
    * Processo: a mesma fonte atende cliente (desabilita slots) e
    * dashboard (detectar conflitos antes de bloquear).
    */
-  async function getAppointmentsByDate(slug, date, barbeiroId) {
+  async function getAppointmentsByDate(slug, date, barbeiroId, statusList) {
     if (!isReady()) return [];
     let query = client
       .from('agendamentos')
       .select('id,data,horario,status,cliente_nome,cliente_telefone,servico_nome,barbeiro_id')
       .eq('barbearia_slug', slug)
       .eq('data', date)
-      .neq('status', 'cancelado')
       .order('horario', { ascending: true });
 
     /*
@@ -72,6 +71,12 @@ const Api = (() => {
     */
     if (barbeiroId) {
       query = query.eq('barbeiro_id', barbeiroId);
+    }
+
+    if (Array.isArray(statusList) && statusList.length) {
+      query = query.in('status', statusList);
+    } else {
+      query = query.neq('status', 'cancelado');
     }
 
     const { data, error } = await query;
