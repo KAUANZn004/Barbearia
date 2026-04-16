@@ -14,7 +14,7 @@
        │     └── signInWithPassword → checkRole → dashboard-dono.html?b=<slug>
        └── [Cadastrar] → Tela 3: form completo
              └── signUp → INSERT barbearias → dashboard-dono.html?b=<slug>
-     [Quero Agendar] → Modal slug → index.html?b=<slug>
+    [Quero Agendar] → Modal slug → agendamentos.html?b=<slug>
 
    DEPENDÊNCIAS:
      - Supabase JS v2 carregado antes (window.supabase)
@@ -550,7 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     localStorage.setItem('barbersaas.slug', slug);
-    window.location.href = `index.html?b=${slug}`;
+    window.location.href = `agendamentos.html?b=${slug}`;
   });
 
     /* ══════════════════════════════════════════════════
