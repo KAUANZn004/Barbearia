@@ -15,7 +15,11 @@
     (function () {
       try {
         var sessao = localStorage.getItem('colaborador_logado');
-        if (!sessao) {
+        var hasSupabaseSession = Object.keys(localStorage).some(function (key) {
+          return /(^|-)auth-token$/.test(String(key)) && String(key).indexOf('sb-') === 0;
+        });
+
+        if (!sessao && !hasSupabaseSession) {
           window.location.replace('portal.html');
         }
       } catch (e) {

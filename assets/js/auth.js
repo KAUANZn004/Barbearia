@@ -29,6 +29,33 @@
 
 'use strict';
 
+const INTERNAL_AUTH_DOMAIN = 'barbearia.local';
+
+function resolveAssetPage(pageFile) {
+  const path = String(window.location.pathname || '').toLowerCase();
+  const inAssets = path.includes('/assets/');
+  const relativeTarget = inAssets ? pageFile : `assets/${pageFile}`;
+  return new URL(relativeTarget, window.location.href).toString();
+}
+
+function navigateTo(pageFile, queryParams = null, replace = false) {
+  const url = new URL(resolveAssetPage(pageFile));
+  if (queryParams && typeof queryParams === 'object') {
+    Object.entries(queryParams).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    });
+  }
+
+  if (replace) {
+    window.location.replace(url.toString());
+    return;
+  }
+
+  window.location.href = url.toString();
+}
+
 /* ─────────────────────────────────────────────────────
    AUTHSERVICE — operações Supabase Auth
 
@@ -49,9 +76,10 @@ const AuthService = {
    * @returns {{ user: User|null, error: Error|null }}
    */
   async signIn(loginOrEmail, password) {
+    const rawLogin = String(loginOrEmail || '').trim().toLowerCase();
     const normalizedEmail = window.Permissoes
-      ? window.Permissoes.loginToAuthEmail(loginOrEmail)
-      : String(loginOrEmail || '').trim().toLowerCase();
+      ? window.Permissoes.loginToAuthEmail(rawLogin)
+      : (rawLogin.includes('@') ? rawLogin : `${rawLogin}@${INTERNAL_AUTH_DOMAIN}`);
 
     const { data, error } = await Api.client.auth.signInWithPassword({
       email: normalizedEmail,
@@ -164,7 +192,7 @@ const AuthService = {
   /** Encerra sessão e redireciona ao portal. */
   async signOut() {
     await Api.client.auth.signOut();
-    window.location.replace('portal.html');
+    navigateTo('portal.html', null, true);
   },
 
   /**
@@ -182,12 +210,12 @@ const AuthService = {
   async requireBarbeiro() {
     const session = await this.getSession();
     if (!session) {
-      window.location.replace('portal.html');
+      navigateTo('portal.html', null, true);
       return null;
     }
     const ctx = await this.checkRole(session.user.id);
     if (!ctx.isBarbeiro) {
-      window.location.replace('index.html');
+      navigateTo('agendamentos.html', null, true);
       return null;
     }
     return { user: session.user, ...ctx };
@@ -423,9 +451,9 @@ document.addEventListener('DOMContentLoaded', () => {
       // Passo 3 — salvar slug e redirecionar conforme papel RBAC
       localStorage.setItem('barbersaas.slug', ctx.barbearia.slug);
       if (ctx.role === 'dono') {
-        window.location.href = `dashboard-dono.html?b=${ctx.barbearia.slug}`;
+        navigateTo('dashboard-dono.html', { b: ctx.barbearia.slug });
       } else {
-        window.location.href = `dashboard-colaborador.html?b=${ctx.barbearia.slug}`;
+        navigateTo('dashboard-colaborador.html', { b: ctx.barbearia.slug });
       }
 
     } catch (err) {
@@ -522,7 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Passo 3 — salvar slug e redirecionar
       localStorage.setItem('barbersaas.slug', slug);
-      window.location.href = `dashboard-dono.html?b=${slug}`;
+      navigateTo('dashboard-dono.html', { b: slug });
 
     } catch (err) {
       showFormError(registerErrorEl, 'Erro inesperado. Tente novamente.');
@@ -550,7 +578,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     localStorage.setItem('barbersaas.slug', slug);
-    window.location.href = `agendamentos.html?b=${slug}`;
+    navigateTo('agendamentos.html', { b: slug });
   });
 
     /* ══════════════════════════════════════════════════
@@ -589,7 +617,7 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('barbersaas.collab_id', String(colaborador.id));
         localStorage.setItem('barbersaas.slug', String(colaborador.barbearia_slug || ''));
         localStorage.setItem('colaborador_logado', JSON.stringify(colaborador));
-        window.location.href = `dashboard-colaborador.html?b=${encodeURIComponent(colaborador.barbearia_slug || '')}`;
+        navigateTo('dashboard-colaborador.html', { b: colaborador.barbearia_slug || '' });
       } catch (err) {
         console.error('[Auth] colaborador login error:', err);
         showFormError(collabError, 'Nao foi possivel entrar como colaborador.');

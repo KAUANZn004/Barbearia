@@ -949,11 +949,28 @@ async function bootstrapCollaboratorDashboard() {
   // Fallback: tenta pelo collab_id via DB (mantém retrocompatibilidade)
   if (!colaborador) {
     const collabId = readCollaboratorSessionId();
-    if (!collabId) {
-      window.location.replace('portal.html');
-      return;
+    if (collabId) {
+      colaborador = await Api.getCollaboratorById(collabId);
     }
-    colaborador = await Api.getCollaboratorById(collabId);
+  }
+
+  // Fallback 2: colaborador autenticado via Supabase Auth (user_id)
+  if (!colaborador) {
+    const { data } = await Api.client.auth.getSession();
+    const session = data?.session || null;
+    if (session?.user?.id) {
+      colaborador = await Api.getBarberByUserId(session.user.id);
+      if (colaborador?.id) {
+        localStorage.setItem('barbersaas.collab_id', String(colaborador.id));
+        localStorage.setItem('colaborador_logado', JSON.stringify(colaborador));
+      }
+    }
+  }
+
+  if (!colaborador) {
+    clearCollaboratorSession();
+    window.location.replace('portal.html');
+    return;
   }
 
   if (!colaborador || (colaborador.status && colaborador.status !== 'ativo')) {
